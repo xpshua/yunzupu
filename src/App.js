@@ -1,4 +1,3 @@
-// src/App.jsx
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 
 const injectStyles = () => {
@@ -26,13 +25,18 @@ const injectStyles = () => {
   }
 };
 
-// Supabase配置
+// 从环境变量获取Supabase配置
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
 
 // 检查环境变量
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn('缺少Supabase环境变量配置 - 请在部署时设置');
+}
+
+// 检查URL格式是否正确
+if (SUPABASE_URL && !SUPABASE_URL.startsWith('https://') && !SUPABASE_URL.startsWith('http://')) {
+  console.error('Supabase URL 必须以 https:// 开头');
 }
 
 // 初始化Supabase客户端
@@ -63,6 +67,7 @@ export default function App() {
   const [initialDist, setInitialDist] = useState(null); 
   const [modalType, setModalType] = useState(null); 
   const [form, setForm] = useState({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+  const [error, setError] = useState(null);
 
   const canvasRef = useRef(null);
 
@@ -72,133 +77,169 @@ export default function App() {
 
   // 初始化Supabase
   useEffect(() => {
+    // 检查环境变量是否设置
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-      console.error('请设置Supabase环境变量');
+      setError('缺少Supabase环境变量配置。请确保设置了 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY');
       setLoading(false);
       return;
     }
 
+    // 检查URL格式
+    if (!SUPABASE_URL.startsWith('https://')) {
+      setError('Supabase URL 必须以 https:// 开头');
+      setLoading(false);
+      return;
+    }
+
+    // 导入Supabase客户端
     import('@supabase/supabase-js').then(({ createClient }) => {
-      const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      
-      // 获取初始数据
-      const fetchInitialData = async () => {
-        try {
-          // 获取成员数据
-          let { data: membersData, error: membersError } = await supabase
-            .from('members')
-            .select('*')
-            .eq('app_id', APP_DATA_ID);
-          
-          if (membersError) throw membersError;
-          setMembers(membersData || []);
-          
-          // 获取事件数据并按时间倒序排序
-          let { data: eventsData, error: eventsError } = await supabase
-            .from('events')
-            .select('*')
-            .eq('app_id', APP_DATA_ID)
-            .order('date', { ascending: false });
-          
-          if (eventsError) throw eventsError;
-          setEvents(eventsData || []);
-        } catch (error) {
-          console.error('获取初始数据失败:', error);
-        } finally {
-          setLoading(false);
-        }
-      };
+      try {
+        // 创建Supabase客户端实例
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        // 设置全局supabaseClient
+        supabaseClient = supabase;
+        
+        // 获取初始数据
+        const fetchInitialData = async () => {
+          try {
+            // 获取成员数据
+            let { data: membersData, error: membersError } = await supabase
+              .from('members')
+              .select('*')
+              .eq('app_id', APP_DATA_ID);
+            
+            if (membersError) {
+              console.error('获取成员数据失败:', membersError);
+              setError(`获取成员数据失败: ${membersError.message}`);
+              return;
+            }
+            setMembers(membersData || []);
+            
+            // 获取事件数据并按时间倒序排序
+            let { data: eventsData, error: eventsError } = await supabase
+              .from('events')
+              .select('*')
+              .eq('app_id', APP_DATA_ID)
+              .order('date', { ascending: false });
+            
+            if (eventsError) {
+              console.error('获取事件数据失败:', eventsError);
+              setError(`获取事件数据失败: ${eventsError.message}`);
+              return;
+            }
+            setEvents(eventsData || []);
+          } catch (error) {
+            console.error('获取初始数据失败:', error);
+            setError(`获取初始数据失败: ${error.message}`);
+          } finally {
+            setLoading(false);
+          }
+        };
 
-      fetchInitialData();
+        fetchInitialData();
 
-      // 监听成员数据变化
-      const membersChannel = supabase
-        .channel('members-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'members',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            setMembers(prev => [...prev, payload.new]);
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'members',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            setMembers(prev => prev.map(m => m.id === payload.new.id ? payload.new : m));
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'DELETE',
-            schema: 'public',
-            table: 'members',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            setMembers(prev => prev.filter(m => m.id !== payload.old.id));
-          }
-        )
-        .subscribe();
+        // 监听成员数据变化
+        const membersChannel = supabase
+          .channel('members-changes')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'members',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              setMembers(prev => [...prev, payload.new]);
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'members',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              setMembers(prev => prev.map(m => m.id === payload.new.id ? payload.new : m));
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'DELETE',
+              schema: 'public',
+              table: 'members',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              setMembers(prev => prev.filter(m => m.id !== payload.old.id));
+            }
+          )
+          .subscribe();
 
-      // 监听事件数据变化
-      const eventsChannel = supabase
-        .channel('events-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'events',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            // 插入新事件并保持倒序排序
-            setEvents(prev => [payload.new, ...prev].sort((a, b) => new Date(b.date) - new Date(a.date)));
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'events',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            setEvents(prev => prev.map(e => e.id === payload.new.id ? payload.new : e));
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'DELETE',
-            schema: 'public',
-            table: 'events',
-            filter: `app_id=eq.${APP_DATA_ID}`
-          },
-          (payload) => {
-            setEvents(prev => prev.filter(e => e.id !== payload.old.id));
-          }
-        )
-        .subscribe();
+        // 监听事件数据变化
+        const eventsChannel = supabase
+          .channel('events-changes')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'events',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              // 插入新事件并保持倒序排序
+              setEvents(prev => [payload.new, ...prev].sort((a, b) => new Date(b.date) - new Date(a.date)));
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'events',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              setEvents(prev => prev.map(e => e.id === payload.new.id ? payload.new : e));
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'DELETE',
+              schema: 'public',
+              table: 'events',
+              filter: `app_id=eq.${APP_DATA_ID}`
+            },
+            (payload) => {
+              setEvents(prev => prev.filter(e => e.id !== payload.old.id));
+            }
+          )
+          .subscribe();
 
-      // 清理函数
-      return () => {
-        supabase.removeChannel(membersChannel);
-        supabase.removeChannel(eventsChannel);
-      };
+        // 清理函数
+        return () => {
+          if (membersChannel) {
+            supabase.removeChannel(membersChannel);
+          }
+          if (eventsChannel) {
+            supabase.removeChannel(eventsChannel);
+          }
+        };
+      } catch (err) {
+        console.error('初始化Supabase客户端失败:', err);
+        setError(`初始化Supabase客户端失败: ${err.message}`);
+        setLoading(false);
+      }
+    }).catch(err => {
+      console.error('导入Supabase客户端失败:', err);
+      setError(`导入Supabase客户端失败: ${err.message}`);
+      setLoading(false);
     });
   }, []);
 
@@ -390,80 +431,109 @@ export default function App() {
   };
 
   const handleAction = async () => {
+    // 检查Supabase配置
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-      console.error('请设置Supabase环境变量');
+      setError('缺少Supabase环境变量配置。请确保设置了 REACT_APP_SUPABASE_URL 和 REACT_APP_SUPABASE_ANON_KEY');
       return;
     }
 
-    const supabase = await import('@supabase/supabase-js').then(({ createClient }) => 
-      createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-    );
-
-    if (modalType === 'add_root') {
-      const newId = `member-${Date.now()}`;
-      const newMember = { 
-        id: newId, 
-        name: form.name, 
-        gender: form.gender, 
-        birth: form.birth, 
-        avatar: form.avatar, 
-        generation: 1,
-        app_id: APP_DATA_ID
-      };
-      const { error } = await supabase.from('members').insert([newMember]);
-      if (error) console.error('添加根成员失败:', error);
-    } else if (modalType === 'add_child') {
-      const newId = `member-${Date.now()}`;
-      const newMember = { 
-        id: newId, 
-        name: form.name, 
-        gender: form.gender, 
-        birth: form.birth, 
-        avatar: form.avatar, 
-        generation: processedNodes[selectedId].generation + 1, 
-        father_id: selectedId,
-        app_id: APP_DATA_ID
-      };
-      const { error } = await supabase.from('members').insert([newMember]);
-      if (error) console.error('添加子成员失败:', error);
-    } else if (modalType === 'add_spouse') {
-      const newId = `member-${Date.now()}`;
-      const newMember = { 
-        id: newId, 
-        name: form.name, 
-        gender: form.gender, 
-        birth: form.birth, 
-        avatar: form.avatar, 
-        generation: processedNodes[selectedId].generation, 
-        is_spouse_of: selectedId,
-        app_id: APP_DATA_ID
-      };
-      const { error } = await supabase.from('members').insert([newMember]);
-      if (error) console.error('添加配偶失败:', error);
-    } else if (modalType === 'edit') {
-      const { error } = await supabase
-        .from('members')
-        .update({
-          name: form.name,
-          gender: form.gender,
-          birth: form.birth,
-          avatar: form.avatar
-        })
-        .eq('id', selectedId);
-      if (error) console.error('更新成员失败:', error);
-    } else if (modalType === 'add_event') {
-      const newId = `event-${Date.now()}`;
-      const newEvent = { 
-        id: newId, 
-        title: form.name, 
-        date: form.date, 
-        content: form.content,
-        app_id: APP_DATA_ID
-      };
-      const { error } = await supabase.from('events').insert([newEvent]);
-      if (error) console.error('添加事件失败:', error);
+    if (!supabaseClient) {
+      setError('Supabase客户端未初始化，请刷新页面重试');
+      return;
     }
-    setModalType(null); setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+
+    try {
+      if (modalType === 'add_root') {
+        const newId = `member-${Date.now()}`;
+        const newMember = { 
+          id: newId, 
+          name: form.name, 
+          gender: form.gender, 
+          birth: form.birth, 
+          avatar: form.avatar, 
+          generation: 1,
+          app_id: APP_DATA_ID
+        };
+        const { error } = await supabaseClient.from('members').insert([newMember]);
+        if (error) {
+          console.error('添加根成员失败:', error);
+          setError(`添加根成员失败: ${error.message}`);
+          return;
+        }
+      } else if (modalType === 'add_child') {
+        const newId = `member-${Date.now()}`;
+        const newMember = { 
+          id: newId, 
+          name: form.name, 
+          gender: form.gender, 
+          birth: form.birth, 
+          avatar: form.avatar, 
+          generation: processedNodes[selectedId].generation + 1, 
+          father_id: selectedId,
+          app_id: APP_DATA_ID
+        };
+        const { error } = await supabaseClient.from('members').insert([newMember]);
+        if (error) {
+          console.error('添加子成员失败:', error);
+          setError(`添加子成员失败: ${error.message}`);
+          return;
+        }
+      } else if (modalType === 'add_spouse') {
+        const newId = `member-${Date.now()}`;
+        const newMember = { 
+          id: newId, 
+          name: form.name, 
+          gender: form.gender, 
+          birth: form.birth, 
+          avatar: form.avatar, 
+          generation: processedNodes[selectedId].generation, 
+          is_spouse_of: selectedId,
+          app_id: APP_DATA_ID
+        };
+        const { error } = await supabaseClient.from('members').insert([newMember]);
+        if (error) {
+          console.error('添加配偶失败:', error);
+          setError(`添加配偶失败: ${error.message}`);
+          return;
+        }
+      } else if (modalType === 'edit') {
+        const { error } = await supabaseClient
+          .from('members')
+          .update({
+            name: form.name,
+            gender: form.gender,
+            birth: form.birth,
+            avatar: form.avatar
+          })
+          .eq('id', selectedId);
+        if (error) {
+          console.error('更新成员失败:', error);
+          setError(`更新成员失败: ${error.message}`);
+          return;
+        }
+      } else if (modalType === 'add_event') {
+        const newId = `event-${Date.now()}`;
+        const newEvent = { 
+          id: newId, 
+          title: form.name, 
+          date: form.date, 
+          content: form.content,
+          app_id: APP_DATA_ID
+        };
+        const { error } = await supabaseClient.from('events').insert([newEvent]);
+        if (error) {
+          console.error('添加事件失败:', error);
+          setError(`添加事件失败: ${error.message}`);
+          return;
+        }
+      }
+      setModalType(null); 
+      setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+      setError(null); // 清除错误信息
+    } catch (err) {
+      console.error('操作失败:', err);
+      setError(`操作失败: ${err.message}`);
+    }
   };
 
   const exportCanvas = () => {
@@ -473,10 +543,37 @@ export default function App() {
     link.click();
   };
 
-  if (loading) return <div className="fixed inset-0 flex flex-col items-center justify-center bg-white"><div className="animate-spin w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full mb-4"></div><p className="text-slate-400 font-bold">同步宗族数据...</p></div>;
+  if (loading && !error) return <div className="fixed inset-0 flex flex-col items-center justify-center bg-white"><div className="animate-spin w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full mb-4"></div><p className="text-slate-400 font-bold">同步宗族数据...</p></div>;
 
   return (
     <div className="fixed inset-0 bg-slate-50 flex flex-col overflow-hidden">
+      {/* 错误提示 */}
+      {error && (
+        <div className="fixed top-20 left-4 right-4 z-[150] bg-red-100 border border-red-300 text-red-700 p-4 rounded-xl shadow-lg">
+          <div className="flex justify-between items-start">
+            <div>
+              <h3 className="font-bold text-sm">错误信息</h3>
+              <p className="text-xs mt-1">{error}</p>
+            </div>
+            <button onClick={() => setError(null)} className="text-red-700 hover:text-red-900">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div className="mt-3 text-xs text-red-600">
+            <p>常见解决方案：</p>
+            <ul className="list-disc list-inside mt-1 space-y-1">
+              <li>检查环境变量是否正确设置</li>
+              <li>确保Supabase项目URL和密钥无误</li>
+              <li>检查Supabase数据库表是否存在</li>
+              <li>确保网络连接正常</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* 顶部导航 */}
       <header className="fixed top-4 left-4 right-4 h-16 z-[100] flex justify-between items-center px-5 glass-nav rounded-2xl shadow-xl border border-white/50">
         <div className="flex items-center gap-3">
@@ -564,12 +661,26 @@ export default function App() {
                       <h3 className="text-lg font-black text-slate-800 mb-1">{ev.title}</h3>
                       <p className="text-slate-500 text-sm leading-relaxed">{ev.content}</p>
                       {isAdmin && <button onClick={async () => {
-                        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-                        const supabase = await import('@supabase/supabase-js').then(({ createClient }) => 
-                          createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-                        );
-                        const { error } = await supabase.from('events').delete().eq('id', ev.id);
-                        if (error) console.error('删除事件失败:', error);
+                        if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+                          setError('缺少Supabase环境变量配置');
+                          return;
+                        }
+                        
+                        if (!supabaseClient) {
+                          setError('Supabase客户端未初始化');
+                          return;
+                        }
+                        
+                        try {
+                          const { error } = await supabaseClient.from('events').delete().eq('id', ev.id);
+                          if (error) {
+                            console.error('删除事件失败:', error);
+                            setError(`删除事件失败: ${error.message}`);
+                          }
+                        } catch (err) {
+                          console.error('删除事件失败:', err);
+                          setError(`删除事件失败: ${err.message}`);
+                        }
                       }} className="absolute top-4 right-4 text-slate-200 hover:text-rose-500">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6"></polyline>
@@ -643,13 +754,29 @@ export default function App() {
                 </div>
                 <button onClick={async () => {
                   if(!window.confirm("确定要永久从族谱中删除此成员及其关系吗？")) return;
-                  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return;
-                  const supabase = await import('@supabase/supabase-js').then(({ createClient }) => 
-                    createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-                  );
-                  const { error } = await supabase.from('members').delete().eq('id', selectedId);
-                  if (error) console.error('删除成员失败:', error);
-                  setSelectedId(null);
+                  
+                  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+                    setError('缺少Supabase环境变量配置');
+                    return;
+                  }
+                  
+                  if (!supabaseClient) {
+                    setError('Supabase客户端未初始化');
+                    return;
+                  }
+                  
+                  try {
+                    const { error } = await supabaseClient.from('members').delete().eq('id', selectedId);
+                    if (error) {
+                      console.error('删除成员失败:', error);
+                      setError(`删除成员失败: ${error.message}`);
+                      return;
+                    }
+                    setSelectedId(null);
+                  } catch (err) {
+                    console.error('删除成员失败:', err);
+                    setError(`删除成员失败: ${err.message}`);
+                  }
                 }} className="w-full py-3 bg-rose-50 text-rose-500 rounded-xl font-black text-xs border border-rose-100 hover:bg-rose-100 transition-colors">永久从族谱删除成员</button>
               </div>
             )}
@@ -786,3 +913,6 @@ export default function App() {
     </div>
   );
 }
+
+
+
