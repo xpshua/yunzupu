@@ -255,6 +255,7 @@ export default function App() {
   const [modalType, setModalType] = useState(null); 
   const [form, setForm] = useState({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
   const [error, setError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false); // 新增提交状态
 
   const canvasRef = useRef(null);
 
@@ -296,11 +297,17 @@ export default function App() {
     };
   }, []);
 
-  // 添加根成员函数
+  // 添加根成员函数 - 优化版本
   const addRootMember = async () => {
+    if (isSubmitting) return; // 防止重复提交
+    
+    setIsSubmitting(true);
+    setError(null);
+    
     const supabase = supabaseManager.getSupabase();
     if (!supabase) {
       setError('Supabase客户端未初始化');
+      setIsSubmitting(false);
       return;
     }
 
@@ -319,6 +326,7 @@ export default function App() {
 
       if (existingRoot && existingRoot.length > 0) {
         setError('根成员已存在，无法添加多个根成员');
+        setIsSubmitting(false);
         return;
       }
 
@@ -341,21 +349,214 @@ export default function App() {
 
       if (insertError) {
         console.error('插入根成员失败:', insertError);
-        // 提供详细的错误信息
         if (insertError.code === '42501') {
           setError('插入失败：数据库权限不足。请检查Supabase的Row Level Security (RLS)策略配置。您需要在Supabase控制台中为members表设置适当的插入权限。');
         } else {
           setError(`添加根成员失败: ${insertError.message}`);
         }
+        setIsSubmitting(false);
         return;
       }
 
+      // 立即将新成员添加到本地状态
       setMembers(prev => [...prev, newMember]);
+      
+      // 重置表单
       setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
       setModalType(null);
+      
+      // 显示成功提示
+      alert('根成员添加成功！');
     } catch (error) {
       console.error('添加根成员异常:', error);
       setError(`添加根成员异常: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 添加成员函数
+  const addMember = async (parentId, isSpouse = false) => {
+    if (isSubmitting) return; // 防止重复提交
+    
+    setIsSubmitting(true);
+    setError(null);
+    
+    const supabase = supabaseManager.getSupabase();
+    if (!supabase) {
+      setError('Supabase客户端未初始化');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 获取父成员信息以确定代数
+      const parentMember = members.find(m => m.id === parentId);
+      if (!parentMember) {
+        setError('找不到父成员');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 准备新成员数据
+      const newMemberData = {
+        name: form.name,
+        gender: form.gender,
+        birth: form.birth,
+        avatar: form.avatar,
+        generation: isSpouse ? parentMember.generation : parentMember.generation + 1,
+        app_id: APP_DATA_ID,
+        father_id: isSpouse ? null : parentId,
+        mother_id: null,
+        is_spouse_of: isSpouse ? parentId : null
+      };
+
+      // 插入新成员
+      const { data: newMember, error: insertError } = await supabase
+        .from('members')
+        .insert([newMemberData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('插入成员失败:', insertError);
+        if (insertError.code === '42501') {
+          setError('插入失败：数据库权限不足。请检查Supabase的Row Level Security (RLS)策略配置。您需要在Supabase控制台中为members表设置适当的插入权限。');
+        } else {
+          setError(`添加成员失败: ${insertError.message}`);
+        }
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 立即将新成员添加到本地状态
+      setMembers(prev => [...prev, newMember]);
+      
+      // 重置表单
+      setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+      setModalType(null);
+      
+      // 显示成功提示
+      alert(isSpouse ? '配偶添加成功！' : '子女添加成功！');
+    } catch (error) {
+      console.error('添加成员异常:', error);
+      setError(`添加成员异常: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 添加事件函数
+  const addEvent = async () => {
+    if (isSubmitting) return; // 防止重复提交
+    
+    setIsSubmitting(true);
+    setError(null);
+    
+    const supabase = supabaseManager.getSupabase();
+    if (!supabase) {
+      setError('Supabase客户端未初始化');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 准备事件数据
+      const eventData = {
+        content: form.content,
+        date: form.date,
+        related_member_ids: selectedId ? [selectedId].join(',') : '',
+        app_id: APP_DATA_ID
+      };
+
+      // 插入新事件
+      const { data: newEvent, error: insertError } = await supabase
+        .from('events')
+        .insert([eventData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('插入事件失败:', insertError);
+        if (insertError.code === '42501') {
+          setError('插入失败：数据库权限不足。请检查Supabase的Row Level Security (RLS)策略配置。您需要在Supabase控制台中为events表设置适当的插入权限。');
+        } else {
+          setError(`添加事件失败: ${insertError.message}`);
+        }
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 立即将新事件添加到本地状态（保持时间倒序）
+      setEvents(prev => [newEvent, ...prev].sort((a, b) => new Date(b.date) - new Date(a.date)));
+      
+      // 重置表单
+      setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+      setModalType(null);
+      
+      // 显示成功提示
+      alert('事件添加成功！');
+    } catch (error) {
+      console.error('添加事件异常:', error);
+      setError(`添加事件异常: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // 编辑成员函数
+  const editMember = async () => {
+    if (isSubmitting) return; // 防止重复提交
+    
+    setIsSubmitting(true);
+    setError(null);
+    
+    const supabase = supabaseManager.getSupabase();
+    if (!supabase) {
+      setError('Supabase客户端未初始化');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      // 更新成员信息
+      const { data: updatedMember, error: updateError } = await supabase
+        .from('members')
+        .update({
+          name: form.name,
+          gender: form.gender,
+          birth: form.birth,
+          avatar: form.avatar
+        })
+        .eq('id', selectedId)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('更新成员失败:', updateError);
+        if (updateError.code === '42501') {
+          setError('更新失败：数据库权限不足。请检查Supabase的Row Level Security (RLS)策略配置。');
+        } else {
+          setError(`更新成员失败: ${updateError.message}`);
+        }
+        setIsSubmitting(false);
+        return;
+      }
+
+      // 更新本地状态
+      setMembers(prev => prev.map(m => m.id === selectedId ? updatedMember : m));
+      
+      // 重置表单
+      setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+      setModalType(null);
+      
+      // 显示成功提示
+      alert('成员信息更新成功！');
+    } catch (error) {
+      console.error('更新成员异常:', error);
+      setError(`更新成员异常: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -477,7 +678,7 @@ export default function App() {
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e) => {
     if (isDragging && moveCount < 5) {
       const rect = canvasRef.current.getBoundingClientRect();
       const x = (e.clientX - rect.left - transform.x) / transform.scale;
@@ -842,9 +1043,10 @@ export default function App() {
                 {modalType === 'addChild' && '添加子女'}
                 {modalType === 'addSpouse' && '添加配偶'}
                 {modalType === 'edit' && '编辑成员'}
+                {modalType === 'addEvent' && '添加大事件'}
               </h3>
               <button 
-                onClick={() => { setModalType(null); setError(null); }}
+                onClick={() => { setModalType(null); setError(null); setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' }); }}
                 className="text-gray-500 hover:text-gray-700"
               >
                 ×
@@ -858,72 +1060,113 @@ export default function App() {
             )}
             
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">姓名</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => setForm({...form, name: e.target.value})}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="请输入姓名"
-                />
-              </div>
+              {(modalType === 'addRoot' || modalType === 'addChild' || modalType === 'addSpouse' || modalType === 'edit') && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">姓名</label>
+                    <input
+                      type="text"
+                      value={form.name}
+                      onChange={(e) => setForm({...form, name: e.target.value})}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="请输入姓名"
+                    />
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">性别</label>
+                      <select
+                        value={form.gender}
+                        onChange={(e) => setForm({...form, gender: e.target.value})}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="男">男</option>
+                        <option value="女">女</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">出生日期</label>
+                      <input
+                        type="date"
+                        value={form.birth}
+                        onChange={(e) => setForm({...form, birth: e.target.value})}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">头像链接</label>
+                    <input
+                      type="text"
+                      value={form.avatar}
+                      onChange={(e) => setForm({...form, avatar: e.target.value})}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="https://example.com/avatar.jpg"
+                    />
+                  </div>
+                </>
+              )}
               
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">性别</label>
-                  <select
-                    value={form.gender}
-                    onChange={(e) => setForm({...form, gender: e.target.value})}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="男">男</option>
-                    <option value="女">女</option>
-                  </select>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">出生日期</label>
-                  <input
-                    type="date"
-                    value={form.birth}
-                    onChange={(e) => setForm({...form, birth: e.target.value})}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">头像链接</label>
-                <input
-                  type="text"
-                  value={form.avatar}
-                  onChange={(e) => setForm({...form, avatar: e.target.value})}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="https://example.com/avatar.jpg"
-                />
-              </div>
+              {(modalType === 'addEvent') && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">事件内容</label>
+                    <textarea
+                      value={form.content}
+                      onChange={(e) => setForm({...form, content: e.target.value})}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[100px]"
+                      placeholder="请输入事件描述"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">日期</label>
+                    <input
+                      type="date"
+                      value={form.date}
+                      onChange={(e) => setForm({...form, date: e.target.value})}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </>
+              )}
               
               <div className="flex space-x-3 pt-4">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
+                    if (isSubmitting) return; // 防止重复点击
+                    
                     if (modalType === 'addRoot') {
-                      addRootMember();
+                      await addRootMember();
                     } else if (modalType === 'addChild' && selectedId) {
-                      // 添加子女逻辑
+                      await addMember(selectedId, false);
                     } else if (modalType === 'addSpouse' && selectedId) {
-                      // 添加配偶逻辑
+                      await addMember(selectedId, true);
                     } else if (modalType === 'edit' && selectedId) {
-                      // 编辑逻辑
+                      await editMember();
+                    } else if (modalType === 'addEvent') {
+                      await addEvent();
                     }
                   }}
-                  className="flex-1 bg-blue-500 text-white py-3 rounded-lg font-medium hover:bg-blue-600"
+                  disabled={isSubmitting}
+                  className={`flex-1 py-3 rounded-lg font-medium ${
+                    isSubmitting 
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                  }`}
                 >
-                  {modalType === 'edit' ? '保存' : '添加'}
+                  {isSubmitting ? '提交中...' : (modalType === 'edit' ? '保存' : '添加')}
                 </button>
                 
                 <button
-                  onClick={() => { setModalType(null); setError(null); }}
+                  onClick={() => { 
+                    setModalType(null); 
+                    setError(null); 
+                    setForm({ name: '', gender: '男', birth: '', avatar: '', date: '', content: '' });
+                  }}
                   className="flex-1 bg-gray-200 text-gray-800 py-3 rounded-lg font-medium hover:bg-gray-300"
                 >
                   取消
